@@ -4,7 +4,6 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../hooks/useAuth';
 import { usePermissions } from '../hooks/usePermissions';
 import { accountKeys } from '../lib/queryKeys';
-import { usingSupabase } from '../services/tickets';
 import type { AppAccount, AuthUser, UserRole } from '../types/auth';
 import { ROLE_LABELS, ROLE_PRIVILEGES, rolePrivilegeSummary } from '../types/auth';
 import { ConfirmModal } from './ConfirmModal';
@@ -83,7 +82,7 @@ function SettingsAccordion({
 }
 
 export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
-  const { user, logout, changePassword, listAccounts, createAccount, deleteAccount, updateAccountRole } =
+  const { user, session, logout, changePassword, listAccounts, createAccount, deleteAccount, updateAccountRole } =
     useAuth();
   const permissions = usePermissions(user);
   const queryClient = useQueryClient();
@@ -274,7 +273,8 @@ export function SettingsDrawer({ open, onClose }: SettingsDrawerProps) {
               </div>
 
               <p className="settings-hint">
-                Backend: {usingSupabase ? 'Supabase' : 'Local storage (demo)'}
+                Backend:{' '}
+                {session && !session.token.startsWith('local-') ? 'Supabase' : 'Local storage (demo)'}
               </p>
 
               <nav className="settings-menu" aria-label="Settings options">

@@ -1,4 +1,4 @@
-import { isSupabaseConfigured } from '../lib/supabase';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import {
   localChangePassword,
   localCreateAccount,
@@ -21,7 +21,6 @@ import {
   supabaseUpdateAccountRole,
 } from '../storage/authSupabase';
 import type { AppAccount, AuthSession, UserRole } from '../types/auth';
-import { hasSupabaseAuthSession } from '../utils/supabaseAuth';
 
 async function persistSession(session: AuthSession): Promise<void> {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
@@ -34,9 +33,12 @@ async function clearStoredSession(): Promise<void> {
 export async function login(username: string, password: string): Promise<AuthSession> {
   if (isSupabaseConfigured) {
     try {
-      return await supabaseLogin(username, password);
+      const session = await supabaseLogin(username, password);
+      await persistSession(session);
+      return session;
     } catch (remoteError) {
       try {
+        await supabaseLogout();
         const session = await localLogin(username, password);
         await persistSession(session);
         return session;
@@ -52,9 +54,18 @@ export async function login(username: string, password: string): Promise<AuthSes
 
 export async function restoreSession(): Promise<AuthSession | null> {
   if (isSupabaseConfigured) {
+    const stored = await localRestoreSession();
+    if (stored?.token.startsWith('local-')) {
+      return stored;
+    }
+
     const remoteSession = await supabaseRestoreSession();
-    if (remoteSession) return remoteSession;
-    return localRestoreSession();
+    if (remoteSession) {
+      await persistSession(remoteSession);
+      return remoteSession;
+    }
+
+    return stored;
   }
   return localRestoreSession();
 }
@@ -69,9 +80,24 @@ export async function logout(_session: AuthSession | null): Promise<void> {
 }
 
 async function shouldUseSupabaseAuth(session: AuthSession): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
+  if (!isSupabaseConfigured || !supabase) return false;
   if (session.token.startsWith('local-')) return false;
-  return hasSupabaseAuthSession();
+
+  const {
+    data: { session: authSession },
+  } = await supabase.auth.getSession();
+  if (!authSession?.user?.id) return false;
+
+  return authSession.user.id === session.user.id;
+}
+
+function isSupabaseSetupError(message: string): boolean {
+  return (
+    message.includes('Not authenticated') ||
+    message.includes('not set up yet') ||
+    message.includes('Could not find the function') ||
+    message.includes('misconfigured')
+  );
 }
 
 export async function changePassword(
@@ -91,6 +117,9 @@ export async function listAccounts(session: AuthSession): Promise<AppAccount[]> 
     try {
       return await supabaseListAccounts();
     } catch (err) {
+      if (err instanceof Error && isSupabaseSetupError(err.message)) {
+        return localListAccounts();
+      }
       throw err;
     }
   }
@@ -106,9 +135,19 @@ export async function createAccount(
   if (session.user.role !== 'admin') {
     throw new Error('You do not have permission to manage accounts.');
   }
+
   if (await shouldUseSupabaseAuth(session)) {
-    return supabaseCreateAccount(username, password, role);
+    try {
+      return await supabaseCreateAccount(username, password, role);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      if (isSupabaseSetupError(message)) {
+        return localCreateAccount(username, password, role);
+      }
+      throw err;
+    }
   }
+
   return localCreateAccount(username, password, role);
 }
 
